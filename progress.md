@@ -21,3 +21,7 @@ Validation completed:
 - Inspected desktop discussion/night/private-notebook/endgame and mobile lobby/game screenshots. Fixed repeated page-entry fades and improved night-mode contrast.
 - Credential scan of source and production build passed; .env.local is ignored and never staged.
 - GitHub repository created: https://github.com/gmbueno/mafia-game
+- Production-build browser test also passed with two real AI speeches and a human response over direct OpenRouter requests (no development proxy), seven other identities hidden, zero page errors.
+- Pages enabled with GitHub Actions at https://gmbueno.github.io/mafia-game/; automatic test/build/deployment workflow configured on main.
+
+Future improvements (optional): authenticated server for owner-funded/shared-key hosting, voice dialogue, and additional house-rule presets. Current requested single-player game is complete.

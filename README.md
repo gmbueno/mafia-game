@@ -2,6 +2,8 @@
 
 A classic eight-player Mafia table: one human, seven independent AI players. Built in English, with a visual table, individual personalities, private roles and notebooks, two rounds of daily discussion, simultaneous voting, and night actions.
 
+[Play Mafia](https://gmbueno.github.io/mafia-game/)
+
 ## Play
 
 Choose a name and a random or specific role, connect OpenRouter in **Connection settings**, then take a seat. A clearly marked offline practice game is also available.
