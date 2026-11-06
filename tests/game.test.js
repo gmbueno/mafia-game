@@ -4,7 +4,7 @@ import { createGame, startDiscussion, currentSpeaker, speak, legalTargets, resol
 import { buildRequest } from '../src/ai.js';
 const seeded = () => { let n=12345; return () => {n=(n*16807)%2147483647;return(n-1)/2147483646;}; };
 function fixed() {
- const s=createGame('Human','civilian',seeded());
+ const s=createGame('Human','civilian',seeded(),{ballotMode:'plurality',councilRounds:0,personas:false,randomOrder:false});
  ['civilian','mafia','mafia','doctor','detective','civilian','civilian','civilian'].forEach((r,i)=>s.players[i].role=r);
  return s;
 }
@@ -23,7 +23,7 @@ test('random assignment is not tied to a seat',()=>{
  const counts=new Set(Array.from({length:100},()=>createGame().players[0].role));assert.equal(counts.size,4);
 });
 test('discussion and defense require one turn per living player, then vote',()=>{
- const s=fixed(); startDiscussion(s);assert.throws(()=>speak(s,0,'jump the queue'));
+ const s=fixed(); startDiscussion(s);assert.throws(()=>speak(s,1,'jump the queue'));
  for(let pass=0;pass<2;pass++) for(let i=0;i<8;i++) speak(s,currentSpeaker(s),'My case.');
  assert.equal(s.phase,'vote');assert.equal(s.log.filter(e=>e.type==='speech').length,16);
 });

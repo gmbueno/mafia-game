@@ -1,71 +1,61 @@
 # Mafia
 
-A classic eight-player Mafia table: one human, seven independent AI players. Built in English, with a visual table, individual personalities, private roles and notebooks, two rounds of daily discussion, simultaneous voting, and night actions.
+An eight-player Mafia table: one human, seven independent AI players, private roles and memories, public accusations, a final defense and a private Mafia council.
 
-[Play Mafia](https://gmbueno.github.io/mafia-game/)
+[Play Mafia](https://gmbueno.github.io/mafia-game/) · [Protocol](docs/PROTOCOL.md) · [Evaluation](docs/EVALUATION.md)
 
 ## Play
 
-Choose a name and a random or specific role, connect OpenRouter in **Connection settings**, then take a seat. A clearly marked offline practice game is also available.
+Choose a name and a random or specific role, connect OpenRouter in **Connection settings**, then take a seat. **Practice** uses offline scripted opponents and makes no paid requests.
 
-**AI model:** `openai/gpt-6.1-sol` with `reasoning.effort: medium`. No alternative models or automatic scripted fallback in live games. API failures pause the turn and allow retry. OpenRouter usage is charged to the connected account; reported tokens and cost appear in Connection settings. AI turns advance automatically; use the pause control beside the player count to advance them manually. Human turns always wait for you. An eliminated human can continue as a spectator.
+**Only GPT-6.1 Sol, medium reasoning.** Live games never substitute another model or scripted opponent. Failed calls pause play; successful replies from a partial batch survive retry and reload. Connection settings show all attempts, reported usage and reserved cost, with a per-game spending guard (default $3, 200 attempts). Pricing is checked before paid requests. Unreported costs remain reserved; provider billing may differ from estimates.
 
-## Run locally
+The game auto-saves on this device. Completed games stay under **Past games**. After the game, **Replay** lets you move through events from the public table or an individual player's perspective. **Export full game** includes private roles, notebooks and visible AI replies; it excludes API keys and personal human notes. Exports should be shared only after play.
 
-Requires Node.js 22 or later.
+## Rules
+
+- Two Mafia, one Detective, one Doctor, four Civilians. Start with day 1. Each living player has one discussion turn.
+- Simultaneous nominations include a reason. The most-nominated player defends, then the town votes to execute or spare. Execution requires more than half of all living players. Tied nominations use a seeded draw; no nominations means no execution. No public speeches occur between the candidate's defense and the ballot.
+- At night, living Mafia have two private conversation rounds and then choose targets. Disagreement uses the disclosed rotating leader. Doctor protects a living player (self allowed, no consecutive repeats). Detective learns a player's true faction. Actions resolve simultaneously.
+- Roles reveal on death. Dead players cannot act. Town wins with no Mafia; Mafia wins at parity. Draw after day 15.
+- Bluffing about roles and investigation results is legal. Engine events remain authoritative. Speech is capped at 55 words; private AI notebooks at 120 words.
+
+See the [complete frozen protocol](docs/PROTOCOL.md) for transitions, information boundaries and experimental variants.
+
+## Local development
+
+Node.js 22 or later:
 
 ```sh
 npm ci
 cp .env.example .env.local
-# Put your OpenRouter key in OPENROUTER_API_KEY inside .env.local.
+# Add OPENROUTER_API_KEY only to .env.local, if desired.
 npm run dev
 ```
 
-Open the local address printed by Vite. The development-only local proxy uses `.env.local`; the key is never embedded into the browser bundle. Environment files are ignored by Git. Without a local key, enter a personal key in Connection settings.
+The development-only proxy uses the local key. The production build never contains it. Without a local key, use Connection settings. `npm run preview` serves the static production build and has no credential proxy.
 
 ```sh
 npm test
 npm run build
-npm run preview
+npm run dev -- --port 5174
+# In a second terminal:
+npm run test:browser
+npm run benchmark -- --games 100
 ```
 
-`npm run preview` serves the production static build; it does not provide the development proxy. Enter a key in Connection settings for live games in that mode.
+Browser tests use isolated headless Chromium with fully mocked provider transport, never your personal browser or paid API. Install Chromium with `npx playwright install chromium` if necessary. Set `TEST_URL` to test a different address. Tests cover a full game, private council, nominations/defense, replay/export, archives, save/resume, errors/retry and mobile layout.
 
-## GitHub Pages
+The benchmark command is **offline by default**. Live pilots require an explicit environment key and explicit cost/call/game limits, and remain locked to Sol medium. See [evaluation instructions](docs/EVALUATION.md). CI never runs paid evaluations.
 
-The included workflow tests and builds the app, then deploys `dist/` to Pages on pushes to `main`. Under **Settings → Pages → Build and deployment**, select **GitHub Actions**. No repository API secret is required. Vite uses relative asset paths so the app works under a repository URL.
+## Hosting and privacy
 
-GitHub Pages is static hosting. Visitors supply their own OpenRouter key, held in `sessionStorage` for that tab. Keys go directly to OpenRouter and are not saved with games. Do not put a shared API key into the source, a `VITE_` variable, GitHub Pages files, or a workflow build artifact. A shared-key deployment would need a separate authenticated server.
+GitHub Actions tests and builds on `main`, then deploys `dist/` to GitHub Pages. Vite uses relative asset paths. Pages is static: visitors use their own OpenRouter keys, held in their tab's `sessionStorage`. Never embed a shared key in source, a `VITE_` variable or a build artifact. Owner-funded shared access would require a separate authenticated server.
 
-## House rules
+`agentView()` is the sole source of player context. It excludes other notebooks, hidden roles, audit records and human notes. Mafia receive legitimate allies and only messages addressed to them. Simultaneous decisions use frozen observations. Short strategic notebooks are not hidden chain of thought; provider reasoning fields are not stored.
 
-Based on [Mafia (party game)](https://en.wikipedia.org/wiki/Mafia_(party_game)), with explicit rules for this eight-player table:
+IndexedDB holds the current game and completed archives. API keys are separate. Legacy v1 saves remain in localStorage untouched but cannot resume under v2 rules. As a local single-player game, a human can inspect saved secrets with developer tools. Logs are useful for reproducibility, not tamper-proof multiplayer certification. Clearing site data deletes local games.
 
-- **2 Mafia, 1 Detective, 1 Doctor, 4 Civilians.** Roles are shuffled, including when the human chooses a role.
-- Day 1 begins with a discussion. Each living player gets one opening turn and one final defense. The opening speaker rotates on later days.
-- Living players submit simultaneous ballots. No self-votes. Abstention is allowed. A unique plurality eliminates; ties or an abstention plurality eliminate nobody.
-- Eliminated players reveal their role and cannot speak, vote or use abilities.
-- At night, each living Mafia nominates a non-Mafia victim. If they disagree, a rotating living Mafia leader's nomination wins. Their partner identity is private to the Mafia.
-- Doctor protects one living player, including themselves, but cannot repeat the previous night's target.
-- Detective investigates one other living player and privately learns **Mafia** or **Town**.
-- Night actions resolve simultaneously; a killed special-role player still performs that night's action. A protected victim survives; the public is not told who was protected.
-- Town wins when all Mafia are gone. Mafia wins at parity with Town. An unresolved game after 15 days ends in a draw.
+## References
 
-## Information boundaries
-
-`agentView()` is the only source of AI game context. Every request has its own system prompt, personality, role, private memory, private investigation/protection history, and public transcript. It never receives the game object, another player's memory, the human's notes, or another living player's role. Mafia receive only their legitimate ally identities. Votes and night actions use a frozen snapshot and are revealed/resolved only after all responses arrive. Successful responses in a failed batch are cached for retry within that page session.
-
-The returned `memory` field is a short strategic notebook, not hidden chain of thought. It is stored separately per player and never shown in public discussion. Player dialogue is treated as untrusted game data in the system prompt; as with any LLM, instruction adherence cannot be mathematically guaranteed.
-
-Games auto-save to `localStorage` on the current browser. This is a single-player browser game: the local engine necessarily holds secret roles and memories. They are hidden from the UI and excluded from other agents' requests, but a human with developer tools can inspect their own saved game. This is not a server-authoritative multiplayer system.
-
-## Validation
-
-```sh
-npm test                         # Rules, transitions, victories and AI isolation
-node tests/browser-smoke.mjs      # Isolated headless Chromium; start dev server first
-```
-
-Set `TEST_URL` if Vite runs on a different port (default test URL is `http://127.0.0.1:5174`). Install the test browser with `npx playwright install chromium` if needed. Browser smoke tests cover a complete practice game, discussion and defense, votes, night actions, private notes, save/resume, mocked live requests and retry, dialogs, and mobile overflow. No test uses the user's personal browser.
-
-Reference: [OpenRouter reasoning configuration](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+Classic [Mafia](https://en.wikipedia.org/wiki/Mafia_(party_game)). Protocol and evaluation design informed by [Dwarkesh Patel's Clocktower project](https://github.com/dwarkeshsp/clocktower), with independently implemented Mafia rules. We do not claim comparable benchmark scores or adopt its high-effort model configuration.

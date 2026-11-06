@@ -22,6 +22,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Test isolated browser with mocked AI
+        run: |
+          npm run dev -- --port 5174 > /tmp/mafia-vite.log 2>&1 &
+          trap 'kill $!' EXIT
+          for attempt in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:5174/ > /dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:browser
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

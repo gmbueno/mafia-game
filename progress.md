@@ -25,3 +25,17 @@ Validation completed:
 - Pages enabled with GitHub Actions at https://gmbueno.github.io/mafia-game/; automatic test/build/deployment workflow configured on main.
 
 Future improvements (optional): authenticated server for owner-funded/shared-key hosting, voice dialogue, and additional house-rule presets. Current requested single-player game is complete.
+
+2026-11-06 — Protocol 2.0 implementation after Clocktower review:
+- User authorized all review improvements, explicitly restricted paid evaluation to GPT-6.1 Sol medium and asked not to run an expensive cohort. No paid calls have been made in this development pass.
+- Referenced dwarkeshsp/clocktower docs/PROTOCOL.md and LICENSE using GitHub connector. Independent Mafia implementation; protocol/evaluation references documented.
+- New default sequence: seeded discussion order, simultaneous reasoned nominations, chosen nominee's final defense, simultaneous execute/spare ballot requiring a strict majority. Mafia have two private council rounds before simultaneous night actions.
+- Fixed bluff instruction conflict, enforce speech/notebook word budgets, preserve per-seat notebooks through command history, seed and version protocol, record exact credential-free requests and visible responses with each attempt and usage/failure status.
+- Cost reservations checked before dispatch; failed/missing usage remains accounted for; no lower-effort/model fallback. Accepted partial-batch responses recover from persistent ledger after reload.
+- IndexedDB current game and completed archive; after-game perspective replay and JSON audit export. API keys and human notes excluded from export. Legacy v1 save left untouched; new rules do not reinterpret it.
+- Offline-by-default evaluation runner with per-game metrics, source hashes, explicit tiny live caps, atomic checkpoints, optional detached belief probes. Added paired-seed comparison and documented development/holdout protocol. Human sessions kept separate from automated comparisons.
+- Added 16 tests (34 total), including privacy across phases, majority rules, late-defense guarantee, private council, replay equivalence, billed invalid responses, concurrent budget reservations and detached probes. Tests and build pass.
+- Offline 100-game standard plus five games for each alternative completed with zero provider calls. These are uninformed random policies, not model quality/balance estimates.
+- Headless full browser tests passed detective and Mafia practice games, council privacy, nominations, defense, archives, replay/export, save/resume, mocked failure/retry, mobile overflow. All provider transport intercepted. Refining historical table rendering in replay and final deployment verification next.
+- Final browser pass after historical-table and lifecycle fixes: PASS, two mocked live requests, zero page errors. Verified desktop and mobile replay screenshots; private council remains readable from the Mafia notebook after night discussion.
+- Production build and credential scan of source, docs, tests and build passed. No API key in tracked files or artifacts. CI now runs the isolated mocked browser flow before Pages deployment.
