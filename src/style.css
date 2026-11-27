@@ -14,3 +14,50 @@
 .loading-table{display:grid;place-items:center;min-height:80vh;color:var(--muted);font-size:14px}
 
 .key-field{display:flex;align-items:center;gap:8px}.key-field input{flex:1;min-width:0}.toggle-key{flex:0 0 auto;padding:6px 10px;font-size:12px}
+/* SimGrammar: seat archetypes, suspicion evolution & match chronicle */
+.seat-trait{display:inline-block;font-size:8px;letter-spacing:.2px;color:var(--muted);opacity:.92;white-space:nowrap}
+.profile-trait{display:inline-block;margin:2px auto 6px;padding:3px 9px;border-radius:999px;border:1px solid #d7dfca;background:#eef2e4;font-size:9px;font-weight:600;letter-spacing:.5px;color:#4a6144;text-transform:uppercase}
+.profile-persona{font-size:10px;line-height:1.65;color:#79856d;margin:8px auto 0;max-width:300px}
+.suspicion-card{margin:16px 0;padding:14px;border:1px solid var(--line);border-radius:8px;background:#f4f5ec}
+.suspicion-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.suspicion-scope{font-size:9px;color:var(--muted);font-weight:550}
+.suspicion-legend{display:flex;justify-content:space-between;font-size:8px;color:var(--muted);margin:6px 0 10px;letter-spacing:.3px}
+.legend-trust{color:#496f55}.legend-suspect{color:var(--accent)}
+.suspicion-grid-wrap{overflow-x:auto;scrollbar-width:thin;padding-bottom:2px}
+.suspicion-grid{display:grid;gap:4px;min-width:max-content;width:100%}
+.suspicion-head,.suspicion-row{display:grid;grid-template-columns:56px repeat(var(--days),minmax(28px,1fr));gap:4px;align-items:center}
+.suspicion-head{font-size:8px;color:var(--muted);text-align:center;font-weight:600;letter-spacing:.3px;padding-bottom:2px}
+.suspicion-head span:first-child{text-align:left}
+.suspicion-row.out .suspicion-name{text-decoration:line-through;opacity:.6}
+.suspicion-name{font-size:9px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sus-cell{position:relative;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:8px;font-variant-numeric:tabular-nums;border:1px solid transparent}
+.sus-cell i{position:absolute;left:0;right:0;bottom:0;opacity:.22;pointer-events:none}
+.sus-cell em{position:relative;z-index:1;font-style:normal;font-weight:600}
+.sus-na{background:transparent;color:var(--muted);opacity:.45}
+.sus-0{background:#eceee4;color:#7a8173}
+.sus-neg-1{background:#e4ede4;color:#3d6348}.sus-neg-1 i{background:#4f805e}
+.sus-neg-2{background:#d4e5d6;color:#2e573b}.sus-neg-2 i{background:#3a704c}
+.sus-neg-3{background:#bedbc3;color:#1f482c}.sus-neg-3 i{background:#2a5f3c}
+.sus-pos-1{background:#f4e8db;color:#995c34}.sus-pos-1 i{background:#c57b42}
+.sus-pos-2{background:#f2d8cb;color:#a7462d}.sus-pos-2 i{background:#c24d36}
+.sus-pos-3{background:#ecc4b6;color:#8e2c1a}.sus-pos-3 i{background:#b13621}
+.sus-out{border-color:#8d8f84;border-style:dashed}
+.chronicle-card{margin:16px 0;padding:14px;border:1px solid var(--line);border-radius:8px;background:#f4f5ec}
+.chronicle-compact{margin:0;border:0;border-top:1px solid var(--line);border-radius:0;background:#f2f4e8;flex-shrink:0}
+.chronicle-header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.chronicle-copy{padding:2px 6px;font-size:9px;gap:5px;color:var(--green)}
+.chronicle-copy .icon{width:12px;height:12px}
+.chronicle-list{margin:0;padding-left:15px;display:flex;flex-direction:column;gap:6px;font-size:10px;line-height:1.55;color:#55624e}
+.chronicle-list li::marker{color:var(--accent)}
+[data-time=night] .suspicion-card,[data-time=night] .chronicle-card{background:#313d34;border-color:#495944}
+[data-time=night] .chronicle-compact{background:#2d3a30;border-top-color:#435043}
+[data-time=night] .chronicle-list{color:#c5d1b7}
+[data-time=night] .chronicle-copy{color:#b7cca4}
+[data-time=night] .sus-0{background:#3a463c;color:#9ea993}
+[data-time=night] .sus-neg-1{background:#2d4537;color:#9fd0ae}
+[data-time=night] .sus-neg-2{background:#264c37;color:#b2e0c0}
+[data-time=night] .sus-neg-3{background:#1f5539;color:#cbf0d6}
+[data-time=night] .sus-pos-1{background:#4f3e2f;color:#e7ba8c}
+[data-time=night] .sus-pos-2{background:#5a372c;color:#f1a78f}
+[data-time=night] .sus-pos-3{background:#682f25;color:#ffb4a2}
+@media(max-width:900px){.seat-trait{font-size:7px}.suspicion-head,.suspicion-row{grid-template-columns:48px repeat(var(--days),minmax(25px,1fr))}}

@@ -1,5 +1,5 @@
 import './style.css';
-import { CAST, ROLES, createGame, currentSpeaker, startDiscussion, speak, alive, legalTargets, resolveVotes, startNight, resolveNight, nextDay, agentView, whisper, resolveNominations, remember, replayAt, playerView, exportGame } from './game.js';
+import { CAST, ROLES, createGame, currentSpeaker, startDiscussion, speak, alive, legalTargets, resolveVotes, startNight, resolveNight, nextDay, agentView, whisper, resolveNominations, remember, replayAt, playerView, exportGame, computeSuspicionHistory, buildChronicle, formatChronicle } from './game.js';
 import { requestTurn, recordCall } from './ai.js';
 import { portrait, icon, emblem } from './art.js';
 import { LIMITS, wordCount } from './protocol.js';
@@ -12,7 +12,7 @@ let apiKey = ''; try { apiKey = sessionStorage.getItem('mafia-key') || ''; } cat
 let local = false, busy = false, error = '', tab = 'discussion', modal = null, selected = null, chosen = 'random', playerName = 'You';
 let auto = true, sound = false, practice = game?.practice || false, marked = [], thinking = [], controller, timer;
 let draft = '', pendingCache = new Map(), replayIndex = 0, replaySeat = -1, archives = [];
-let spendingLimit = 3, storageIssue = '', replaySnapshot = null;
+let spendingLimit = 3, storageIssue = '', replaySnapshot = null, copiedChronicle = false, copyTimer;
 const isPrivateTurn = () => game?.phase === 'council';
 const councilVisible = () => me()?.alive && me()?.role === 'mafia';
 const sendSpeech = text => isPrivateTurn() ? whisper(game, 0, text) : speak(game, 0, text);
@@ -67,10 +67,11 @@ function renderSeat(p) {
   const active = current() === p.id, eligible = targets().includes(p.id), dead = !p.alive;
   const known = roleKnown(p), role = known ? ROLES[p.role] : null;
   const badge = dead ? 'Out' : active ? busy ? 'Thinking' : p.id === 0 ? 'Your turn' : 'Speaking' : p.id === 0 ? 'You' : '';
-  return `<button class="seat seat-${p.id} ${active ? 'active' : ''} ${dead ? 'eliminated' : ''} ${selected === p.id ? 'selected' : ''} ${eligible ? 'eligible' : ''}" data-seat="${p.id}" aria-label="${escape(p.name)}${role ? `, ${role.name}` : ', hidden role'}${active ? ', current speaker' : ''}" ${busy && canSelect() ? 'disabled' : ''}>
+  const persona = p.trait || p.style || '';
+  return `<button class="seat seat-${p.id} ${active ? 'active' : ''} ${dead ? 'eliminated' : ''} ${selected === p.id ? 'selected' : ''} ${eligible ? 'eligible' : ''}" data-seat="${p.id}"${p.id !== 0 && persona ? ` title="${escape(persona)}"` : ''} aria-label="${escape(p.name)}${role ? `, ${role.name}` : ', hidden role'}${active ? ', current speaker' : ''}" ${busy && canSelect() ? 'disabled' : ''}>
     <div class="avatar-wrap">${portrait(p.id)}${active ? `<span class="speech-indicator">${busy ? '<i></i><i></i><i></i>' : '<b></b><b></b><b></b><b></b>'}</span>` : ''}${dead ? `<span class="dead-mark">${icon('x')}</span>` : ''}${marked.includes(p.id) ? `<span class="suspicion-mark">${icon('flag')}</span>` : ''}${selected === p.id ? `<span class="selection-mark">${icon('check')}</span>` : ''}</div>
     <span class="seat-name">${escape(p.name)}${p.id === 0 && game && p.name !== 'You' ? '<small>YOU</small>' : ''}</span>
-    <span class="seat-detail ${role?.team === 'Mafia' ? 'red' : ''}">${badge ? `<span class="seat-badge ${active ? 'turn-badge' : ''}">${badge}</span>` : role ? role.name : game ? 'Role hidden' : p.style}</span>
+    <span class="seat-detail ${role?.team === 'Mafia' ? 'red' : ''}">${badge ? `<span class="seat-badge ${active ? 'turn-badge' : ''}">${badge}</span>` : role ? role.name : game ? `<span class="seat-trait">${escape(persona || 'Role hidden')}</span>` : escape(persona)}</span>
   </button>`;
 }
 function renderLobby() {
@@ -107,6 +108,47 @@ function renderAction() {
   if (p === 'ended') return `<div class="action-card end-card"><span class="turn-symbol">${icon(game.winner === 'Mafia' ? 'mask' : 'town')}</span><div><strong>${game.winner === 'Draw' ? 'A draw.' : `${game.winner} wins.`}</strong><p>${game.winner === 'Draw' ? 'The town could not reach a verdict in 15 days.' : (game.winner === ROLES[me().role].team ? 'You were on the winning side.' : 'The other side had the last word.')} All roles are revealed.</p></div><button class="secondary-button" data-action="replay">Replay</button><button class="primary-button" data-action="new">Play again ${icon('refresh')}</button></div>`;
   return '';
 }
+function renderChronicleCard(compact = false) {
+  const points = buildChronicle(game);
+  if (!points.length) return '';
+  return `<section class="chronicle-card ${compact ? 'chronicle-compact' : ''}" aria-label="Match chronicle">
+    <div class="chronicle-header"><span class="eyebrow">MATCH CHRONICLE</span><button type="button" class="text-button chronicle-copy" data-action="copy-chronicle">${icon(copiedChronicle ? 'check' : 'copy')}<span>${copiedChronicle ? 'Copied' : 'Copy chronicle'}</span></button></div>
+    <ul class="chronicle-list">${points.map(pt => `<li>${escape(pt.text)}</li>`).join('')}</ul>
+  </section>`;
+}
+function renderSuspicionEvolution(snapshot, revealed) {
+  const history = computeSuspicionHistory(snapshot);
+  if (!history.length) return '';
+  const seatView = replaySeat >= 0 ? snapshot.players[replaySeat] : null;
+  const formatScore = v => {
+    if (v === null || v === undefined) return '·';
+    const rounded = Math.round(v * 10) / 10;
+    return rounded > 0 ? `+${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}` : `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}`;
+  };
+  const levelClass = v => {
+    if (v === null || v === undefined) return 'sus-na';
+    const bucket = Math.max(-3, Math.min(3, Math.round(v)));
+    return bucket > 0 ? `sus-pos-${bucket}` : bucket < 0 ? `sus-neg-${Math.abs(bucket)}` : 'sus-0';
+  };
+  return `<section class="suspicion-card" aria-label="Suspicion evolution">
+    <div class="suspicion-header"><span class="eyebrow">SUSPICION EVOLUTION</span><span class="suspicion-scope">${seatView ? `${escape(seatView.name)}’s view` : 'Table avg'}</span></div>
+    <div class="suspicion-legend"><span class="legend-trust">−3 Trust</span><span>0</span><span class="legend-suspect">+3 Suspect</span></div>
+    <div class="suspicion-grid-wrap">
+      <div class="suspicion-grid" style="--days:${history.length}">
+        <div class="suspicion-head"><span>Seat</span>${history.map(h => `<span>D${h.day}</span>`).join('')}</div>
+        ${revealed.map(p => `<div class="suspicion-row ${!p.alive ? 'out' : ''}">
+          <span class="suspicion-name" title="${escape(p.name)}">${escape(p.name)}</span>
+          ${history.map(h => {
+            const val = seatView ? (seatView.id === p.id ? null : (h.matrix[seatView.id]?.[p.id] ?? null)) : h.averageByTarget[p.id];
+            const diedHere = h.eliminated.some(e => e.id === p.id);
+            const pct = val === null ? 0 : Math.min(100, Math.round((Math.abs(val) / 3) * 100));
+            return `<span class="sus-cell ${levelClass(val)} ${diedHere ? 'sus-out' : ''}" title="${escape(p.name)} · Day ${h.day}: ${val === null ? 'N/A' : formatScore(val)}${diedHere ? ' (eliminated)' : ''}"><i style="height:${pct}%"></i><em>${formatScore(val)}</em></span>`;
+          }).join('')}
+        </div>`).join('')}
+      </div>
+    </div>
+  </section>`;
+}
 function renderGamePanel() {
   if (tab === 'replay' && game.winner) return renderReplay();
   const writing = canSpeak() || (game.phase === 'nomination' && me().alive && selected !== null && selected !== -1);
@@ -115,7 +157,7 @@ function renderGamePanel() {
   return `<div class="your-role-bar"><span class="role-mini">${icon(p.icon)}</span><div><span class="eyebrow">YOUR ROLE</span><strong>${p.name}</strong></div><span class="team-pill ${p.team === 'Mafia' ? 'evil' : ''}">${p.team}</span>${!me().alive ? '<span class="out-label">OUT</span>' : icon('lock','subtle-lock')}</div>
     <div class="panel-tabs" role="tablist"><button role="tab" aria-selected="${tab === 'discussion'}" data-tab="discussion" class="${tab === 'discussion' ? 'active' : ''}">${privateView ? 'Mafia council' : 'Discussion'} <span>${game.log.filter(e => e.type === 'speech').length}</span></button><button role="tab" aria-selected="${tab === 'notebook'}" data-tab="notebook" class="${tab === 'notebook' ? 'active' : ''}">${icon('note')} Notebook${me().intel.length ? '<i class="unread-dot"></i>' : ''}</button></div>
     ${tab === 'discussion' ? `<div class="messages" aria-live="polite" aria-label="${privateView ? 'Mafia council' : 'Public discussion'}">${privateView ? game.council.filter(e => e.audience.includes(0)).map(e => renderMessage({ ...e, type: 'speech', phase: 'council' })).join('') : game.log.map(renderMessage).join('')}${busy && current() !== null && (!isPrivateTurn() || privateView) ? `<div class="typing"><span class="status-dot"></span>${escape(game.players[current()].name)} is thinking<span class="ellipsis">…</span></div>` : ''}</div>
-    <form id="speech-form" class="compose ${writing && !busy ? 'your-turn' : ''}"><div class="compose-label">${writing ? `${icon('send')} ${privateView ? 'MAFIA ONLY' : game.phase === 'nomination' ? 'YOUR NOMINATION' : 'YOUR TURN'}` : me().alive ? `${icon('lock')} ${isNight() ? 'THE CITY IS ASLEEP' : 'WAITING FOR YOUR TURN'}` : `${icon('eye')} SPECTATING`}</div><textarea id="speech" aria-label="Your message to the table" maxlength="5000" placeholder="${writing ? game.phase === 'nomination' ? 'Why this player?' : 'What’s your read?' : 'Listen. Watch. Remember.'}" ${!writing || busy ? 'disabled' : ''}>${escape(draft)}</textarea><div class="compose-bottom"><span>${writing ? `<span id="word-count">${wordCount(draft)} / ${LIMITS.speech} words</span>` : privateView ? 'Only living Mafia see these messages.' : 'Only the table’s conversation is shared.'}</span><button type="submit" class="send-button" aria-label="Send message" ${!writing || busy ? 'disabled' : ''}>${icon('arrow')}</button></div></form>` : `<div class="notebook"><div class="private-label">${icon('lock')} ONLY YOU CAN SEE THIS</div>${me().role === 'mafia' ? `<div class="intel-card"><span class="eyebrow">YOUR PARTNER</span><strong>${escape(game.players.find(p => p.id !== 0 && p.role === 'mafia').name)}</strong></div>` : ''}${me().role === 'mafia' ? game.council.filter(e => e.audience.includes(0)).map(e => `<div class="intel-card"><span class="eyebrow">NIGHT ${e.day} · MAFIA COUNCIL</span><p><strong>${escape(game.players[e.id].name)}:</strong> ${escape(e.text)}</p></div>`).join('') : ''}${me().intel.map(e => `<div class="intel-card"><span class="eyebrow">NIGHT ${e.day}</span><p>${escape(e.text)}</p></div>`).join('')}<label for="notes">Your notes</label><textarea id="notes" placeholder="Names, tells, loose ends…" maxlength="5000">${escape(game.notes)}</textarea><p class="notebook-hint">Click a player to flag a suspicion.</p></div>`}`;
+    ${game.winner ? renderChronicleCard(true) : `<form id="speech-form" class="compose ${writing && !busy ? 'your-turn' : ''}"><div class="compose-label">${writing ? `${icon('send')} ${privateView ? 'MAFIA ONLY' : game.phase === 'nomination' ? 'YOUR NOMINATION' : 'YOUR TURN'}` : me().alive ? `${icon('lock')} ${isNight() ? 'THE CITY IS ASLEEP' : 'WAITING FOR YOUR TURN'}` : `${icon('eye')} SPECTATING`}</div><textarea id="speech" aria-label="Your message to the table" maxlength="5000" placeholder="${writing ? game.phase === 'nomination' ? 'Why this player?' : 'What’s your read?' : 'Listen. Watch. Remember.'}" ${!writing || busy ? 'disabled' : ''}>${escape(draft)}</textarea><div class="compose-bottom"><span>${writing ? `<span id="word-count">${wordCount(draft)} / ${LIMITS.speech} words</span>` : privateView ? 'Only living Mafia see these messages.' : 'Only the table’s conversation is shared.'}</span><button type="submit" class="send-button" aria-label="Send message" ${!writing || busy ? 'disabled' : ''}>${icon('arrow')}</button></div></form>`}` : `<div class="notebook"><div class="private-label">${icon('lock')} ONLY YOU CAN SEE THIS</div>${me().role === 'mafia' ? `<div class="intel-card"><span class="eyebrow">YOUR PARTNER</span><strong>${escape(game.players.find(p => p.id !== 0 && p.role === 'mafia').name)}</strong></div>` : ''}${me().role === 'mafia' ? game.council.filter(e => e.audience.includes(0)).map(e => `<div class="intel-card"><span class="eyebrow">NIGHT ${e.day} · MAFIA COUNCIL</span><p><strong>${escape(game.players[e.id].name)}:</strong> ${escape(e.text)}</p></div>`).join('') : ''}${me().intel.map(e => `<div class="intel-card"><span class="eyebrow">NIGHT ${e.day}</span><p>${escape(e.text)}</p></div>`).join('')}<label for="notes">Your notes</label><textarea id="notes" placeholder="Names, tells, loose ends…" maxlength="5000">${escape(game.notes)}</textarea><p class="notebook-hint">Click a player to flag a suspicion.</p></div>`}`;
 }
 function renderReplay() {
   const snapshot = replayAt(game, replayIndex), entry = game.history[replayIndex - 1];
@@ -126,6 +168,8 @@ function renderReplay() {
     <div class="replay-control"><button data-action="replay-prev" aria-label="Previous event" ${replayIndex === 0 ? 'disabled' : ''}>←</button><span>Day ${snapshot.day} · ${phaseLabel[snapshot.phase]}<small>${replayIndex} / ${game.history.length} events</small></span><button data-action="replay-next" aria-label="Next event" ${replayIndex === game.history.length ? 'disabled' : ''}>→</button></div>
     <input id="replay-step" type="range" min="0" max="${game.history.length}" value="${replayIndex}" aria-label="Replay position"/>
     <div class="replay-identities">${revealed.map(p => `<span class="${!p.alive ? 'out' : ''}">${escape(p.name)}<b>${p.known ? ROLES[p.role].name : 'Unknown'}</b></span>`).join('')}</div>
+    ${renderSuspicionEvolution(snapshot, revealed)}
+    ${renderChronicleCard()}
     <div class="replay-events">${view ? `<div class="intel-card"><span class="eyebrow">${escape(view.self.name)}’S NOTEBOOK</span><p>${escape(view.self.memory || 'No notes yet.')}</p></div>${view.self.intel.map(i => `<div class="intel-card"><span class="eyebrow">NIGHT ${i.day} · PRIVATE RESULT</span><p>${escape(i.text)}</p></div>`).join('')}${view.privateMessages.map(m => `<div class="intel-card"><span class="eyebrow">NIGHT ${m.day} · MAFIA COUNCIL</span><p><strong>${escape(snapshot.players[m.id].name)}:</strong> ${escape(m.text)}</p></div>`).join('')}` : ''}${snapshot.log.slice(-8).map(renderMessage).join('')}</div>
     <button class="secondary-button export-button" data-action="export">Export full game ${icon('arrow')}</button><p class="replay-note">Export includes all private roles, notebooks and visible AI replies. Personal notes and API keys are excluded.</p></div>`;
 }
@@ -143,7 +187,7 @@ function renderModal() {
   else if (modal === 'new') body = `<span class="eyebrow">LEAVE THE TABLE</span><h2>${game.winner ? 'Another round?' : 'Call it a night?'}</h2><p class="field-help">${game.winner ? 'New identities. New suspicions.' : 'This ends your current game. Your connection will stay ready.'}</p><button class="primary-button" data-action="reset">${game.winner ? 'New game' : 'Leave game'} ${icon('arrow')}</button><button class="text-button modal-back" data-action="close">Stay at the table</button>`;
   else if (typeof modal === 'number') {
     const p = players()[modal], known = roleKnown(p);
-    body = `<div class="profile-portrait">${portrait(p.id)}</div><span class="eyebrow">SEAT ${String(p.id + 1).padStart(2, '0')} · ${p.alive ? 'IN PLAY' : 'ELIMINATED'}</span><h2>${escape(p.name)}</h2><p class="profile-style">${p.id === 0 ? 'Trust your instincts.' : p.style}</p><div class="profile-role">${icon(known ? ROLES[p.role].icon : 'lock')} ${known ? ROLES[p.role].name : 'Identity unknown'}</div>${p.id !== 0 && p.alive ? `<button class="secondary-button" data-action="flag" data-id="${p.id}">${icon('flag')}${marked.includes(p.id) ? 'Clear suspicion' : 'Mark as suspicious'}</button>` : ''}`;
+    body = `<div class="profile-portrait">${portrait(p.id)}</div><span class="eyebrow">SEAT ${String(p.id + 1).padStart(2, '0')} · ${p.alive ? 'IN PLAY' : 'ELIMINATED'}</span><h2>${escape(p.name)}</h2>${p.id !== 0 && p.trait ? `<div class="profile-trait">${escape(p.trait)}</div>` : ''}<p class="profile-style">${p.id === 0 ? 'Trust your instincts.' : escape(p.style)}</p>${p.id !== 0 && p.personality ? `<p class="profile-persona">${escape(p.personality)}</p>` : ''}<div class="profile-role">${icon(known ? ROLES[p.role].icon : 'lock')} ${known ? ROLES[p.role].name : 'Identity unknown'}</div>${p.id !== 0 && p.alive ? `<button class="secondary-button" data-action="flag" data-id="${p.id}">${icon('flag')}${marked.includes(p.id) ? 'Clear suspicion' : 'Mark as suspicious'}</button>` : ''}`;
   }
   return `<div class="modal-backdrop"><section class="modal ${typeof modal === 'number' ? 'profile-modal' : ''}" role="dialog" aria-modal="true" aria-label="${typeof modal === 'number' ? 'Player details' : modal === 'settings' ? 'Connection settings' : modal === 'rules' ? 'How to play' : 'Leave game'}"><button class="icon-button modal-close" data-action="close" aria-label="Close dialog">${icon('x')}</button>${body}</section></div>`;
 }
@@ -171,7 +215,7 @@ function bind() {
 function focusModal() { requestAnimationFrame(() => $('.modal-close')?.focus()); }
 function launch(demo) {
   if (!demo && !local && !apiKey) { modal = 'settings'; render(); focusModal(); return; }
-  controller?.abort(); clearTimeout(timer); pendingCache.clear();
+  controller?.abort(); clearTimeout(timer); clearTimeout(copyTimer); copiedChronicle = false; pendingCache.clear();
   game = createGame(playerName, chosen); game.practice = practice = demo; game.budget = { maxUsd: spendingLimit, maxCalls: 200 };
   tab = 'discussion'; selected = null; error = ''; draft = ''; marked = []; save(); render();
 }
@@ -182,6 +226,14 @@ async function action(a, el) {
   if (a === 'replay-back') { tab = 'discussion'; render(); return; }
   if (a === 'replay-prev' || a === 'replay-next') { replayIndex = Math.max(0, Math.min(game.history.length, replayIndex + (a === 'replay-prev' ? -1 : 1))); render(); return; }
   if (a === 'export' && game?.winner) { const url = URL.createObjectURL(new Blob([JSON.stringify(exportGame(game), null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = `mafia-${game.id}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); return; }
+  if (a === 'copy-chronicle' && game?.winner) {
+    const text = formatChronicle(game);
+    try { await navigator.clipboard.writeText(text); } catch {
+      const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch {} ta.remove();
+    }
+    copiedChronicle = true; clearTimeout(copyTimer); copyTimer = setTimeout(() => { copiedChronicle = false; render(); }, 2000); render(); return;
+  }
   if (a === 'settings' || a === 'rules' || a === 'new') { draft = $('#speech')?.value || draft; modal = a; clearTimeout(timer); render(); focusModal(); return; }
   if (a === 'close') { modal = null; render(); schedule(); return; }
   if (a === 'forget') { apiKey = ''; try { sessionStorage.removeItem('mafia-key'); } catch {} render(); return; }
@@ -210,29 +262,83 @@ function schedule() {
 function offlineTurn(state, id, kind) {
   const view = agentView(state, id, kind), options = view.legalTargets;
   const other = view.players.filter(p => p.alive && p.id !== id && !view.allies.some(a => a.id === p.id));
-  const suspect = other[(state.day + id) % other.length];
+  const pool = other.length ? other : view.players.filter(p => p.alive && p.id !== id);
+  const suspect = pool[(state.day + id) % pool.length];
   const last = [...view.publicLog].reverse().find(e => e.type === 'speech' && e.id !== id);
-  const lines = [
-    'I’m listening. Let’s compare what people say with how they vote.',
-    `I want to hear more from ${suspect.name}. A confident read needs something behind it.`,
-    `${suspect.name}, who would you trust with your vote right now? I want a name before everyone follows the room.`,
-    'I don’t trust a consensus this early. Let’s hear everyone out before we settle on someone.',
-    `${last ? view.players[last.id].name + ' raises a point' : 'We need a starting point'}, but I want to see who actually follows through on their suspicions.`,
-    `My read is ${suspect.name}. I’m open to being wrong, but someone has to put a name on the table.`,
-    `I’m watching ${suspect.name}. I’ll compare this round with their next vote.`,
-    'A good story is easy. A consistent one is harder. Let’s remember where everyone stood before the vote.',
-  ];
-  const defenses = [
-    'I’m standing by what I said. Don’t confuse being careful with being evasive.',
-    `My vote will follow the discussion. ${suspect.name} is still the person I want an answer from.`,
-    `I haven’t heard enough to clear ${suspect.name}. If you think I’m wrong, point to something specific.`,
-    'If I’m wrong, hold me to it tomorrow. I’m not going to hide behind the majority.',
-  ];
+  const lastName = last ? view.players[last.id].name : '';
+  const trait = view.self.trait || '';
+  const voiceByTrait = {
+    'Sharp Analyst': {
+      talk: [
+        `Let’s match claims against actual votes. ${suspect.name} hasn’t squared their record yet.`,
+        `${lastName ? `${lastName} framed a theory, ` : 'We have early claims, '}but I want to compare how ${suspect.name} votes before buying it.`,
+      ],
+      nom: `I nominate ${suspect.name}. Their stated reads and voting record do not line up.`,
+      def: `Check my public record before you swing. Every read I’ve offered followed observable votes, not guesswork.`,
+    },
+    'Provocateur': {
+      talk: [
+        `${suspect.name}, give the table one clear name right now—who are you willing to put on the block?`,
+        `Everyone’s playing it too safe. Watch how ${suspect.name} reacts when the spotlight actually moves their way.`,
+      ],
+      nom: `I nominate ${suspect.name}. Let’s see who rushes to defend them once they’re on the spot.`,
+      def: `Testing reactions isn’t guilt. Notice how quickly the room jumped as soon as I pushed.`,
+    },
+    'Skeptical': {
+      talk: [
+        `I don’t trust consensus this early. ${suspect.name} still needs to explain the contradiction in their read.`,
+        `${lastName ? `${lastName} makes it sound simple, ` : 'That story sounds tidy, '}but ${suspect.name} hasn’t answered the hard question yet.`,
+      ],
+      nom: `I nominate ${suspect.name}. Their explanation shifted once the pressure moved.`,
+      def: `Questioning an easy bandwagon doesn’t make me Mafia. Look closely at who’s happy riding along.`,
+    },
+    'Mediator': {
+      talk: [
+        `Before we lock in a vote, let’s hear ${suspect.name} put a clear read on the record so everyone can weigh it.`,
+        `${lastName ? `${lastName} raises a fair point, ` : 'We need common ground, '}and bringing ${suspect.name} into the open will help the table align.`,
+      ],
+      nom: `I nominate ${suspect.name}. Putting their full defense on the record gives the table clarity.`,
+      def: `I’ve tried to keep every seat accountable on the record. Don’t confuse building consensus with hiding.`,
+    },
+    'Aggressive Voter': {
+      talk: [
+        `Too much hedging already. My read is ${suspect.name}, and I’m ready to put a decisive vote behind it.`,
+        `Someone has to force a real vote today. ${suspect.name} is my top suspect unless they answer directly.`,
+      ],
+      nom: `I nominate ${suspect.name}. We need a decisive vote, and their defense is overdue.`,
+      def: `I’ve put my reads in the open from Day 1. Hold me to them tomorrow—don’t spare the quiet seats.`,
+    },
+    'Quiet Observer': {
+      talk: [
+        `${suspect.name} shifted tone after the last round. Watching their vote closely.`,
+        `Small inconsistencies matter. Comparing ${suspect.name}’s words with the next ballot.`,
+      ],
+      nom: `I nominate ${suspect.name}. Small shifts in their story keep adding up.`,
+      def: `Saying less isn’t evading. Compare what I noticed with what actually happened.`,
+    },
+    'Steady Defender': {
+      talk: [
+        `Let’s slow down and test the case before rushing a vote. ${suspect.name}, walk us through your read clearly.`,
+        `A good story is easy; a steady one holds up under scrutiny. I’m watching ${suspect.name} without jumping early.`,
+      ],
+      nom: `I nominate ${suspect.name}. I’d rather not rush a vote, but their position needs a clear defense.`,
+      def: `A calm vote beats a panicked one. Ask who really benefits if you eliminate me without proof.`,
+    },
+  };
+  const fallback = {
+    talk: [
+      `I want to hear more from ${suspect.name}. A confident read needs something behind it.`,
+      `I’m watching ${suspect.name}. I’ll compare this round with their next vote.`,
+    ],
+    nom: `I nominate ${suspect.name}. I want a clearer account of their choices.`,
+    def: `I’m standing by what I said. Don’t confuse being careful with being evasive.`,
+  };
+  const voice = voiceByTrait[trait] || fallback;
   let choices = options;
   if (kind === 'vote' && view.self.role === 'mafia') choices = options.filter(t => t === -1 || !view.allies.some(a => a.id === t));
-  if (kind === 'nomination') return { speech: `I nominate ${suspect.name}. I want a clearer account of their choices.`, target: suspect.id, memory: 'Compare claims with the next vote.', usage: {} };
+  if (kind === 'nomination') return { speech: voice.nom, target: suspect.id, memory: 'Compare claims with the next vote.', usage: {} };
   if (kind === 'council') return { speech: `Let’s target ${suspect.name}. Keep our public stories consistent.`, target: -1, memory: 'Coordinate the target.', usage: {} };
-  return { speech: state.phase === 'defense' ? defenses[id % defenses.length] : lines[id], target: ['speech','council'].includes(kind) ? -1 : choices[(state.day + id) % choices.length], memory: '', usage: {} };
+  return { speech: state.phase === 'defense' ? voice.def : voice.talk[state.day % voice.talk.length], target: ['speech','council'].includes(kind) ? -1 : choices[(state.day + id) % choices.length], memory: '', usage: {} };
 }
 function recordTurn(id, turn) {
   remember(game, id, turn.memory);

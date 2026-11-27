@@ -1,13 +1,13 @@
 import { PROTOCOL, DEFAULT_OPTIONS, LIMITS, limitWords } from './protocol.js';
 export const CAST = [
-  { name: 'You', style: 'You', personality: '' },
-  { name: 'Theo', style: 'The analyst', personality: 'Measured and analytical. Track voting patterns and distinguish evidence from assumptions. Speak plainly, never use numerical probabilities.' },
-  { name: 'Cleo', style: 'The wildcard', personality: 'Playful and provocative. Test reactions with pointed questions. Change your mind when the evidence warrants it.' },
-  { name: 'Miles', style: 'The skeptic', personality: 'Dry, skeptical and observant. Challenge easy consensus and ask people to explain contradictions.' },
-  { name: 'June', style: 'The diplomat', personality: 'Calm and persuasive. Build coalitions, draw out quieter players and hold people to their earlier statements.' },
-  { name: 'Oscar', style: 'The challenger', personality: 'Direct and confident. Make specific accusations and defend them. Avoid being needlessly abrasive.' },
-  { name: 'Iris', style: 'The observer', personality: 'Quiet, precise and perceptive. Notice inconsistencies and small shifts in stories. Keep your remarks concise.' },
-  { name: 'Felix', style: 'The charmer', personality: 'Warm and quick-witted. Read social dynamics and win trust with specific observations rather than flattery.' },
+  { name: 'You', trait: '', style: 'You', personality: '' },
+  { name: 'Theo', trait: 'Sharp Analyst', style: 'The analyst', personality: 'Measured and analytical. Track voting patterns and distinguish evidence from assumptions. Speak plainly, never use numerical probabilities.' },
+  { name: 'Cleo', trait: 'Provocateur', style: 'The wildcard', personality: 'Playful and provocative. Test reactions with pointed questions. Change your mind when the evidence warrants it.' },
+  { name: 'Miles', trait: 'Skeptical', style: 'The skeptic', personality: 'Dry, skeptical and observant. Challenge easy consensus and ask people to explain contradictions.' },
+  { name: 'June', trait: 'Mediator', style: 'The diplomat', personality: 'Calm and persuasive. Build coalitions, draw out quieter players and hold people to their earlier statements.' },
+  { name: 'Oscar', trait: 'Aggressive Voter', style: 'The challenger', personality: 'Direct and confident. Make specific accusations, push decisive votes, and defend your reads. Avoid being needlessly abrasive.' },
+  { name: 'Iris', trait: 'Quiet Observer', style: 'The observer', personality: 'Quiet, precise and perceptive. Notice inconsistencies and small shifts in stories. Keep your remarks concise.' },
+  { name: 'Felix', trait: 'Steady Defender', style: 'The charmer', personality: 'Warm, grounded and quick-witted. Read social dynamics, steady the table against rushed votes, and win trust with specific observations rather than flattery.' },
 ];
 export const ROLES = {
   civilian: { name: 'Civilian', team: 'Town', icon: 'town', text: 'Find the Mafia. Make your vote count.' },
@@ -196,7 +196,7 @@ export function remember(s, id, memory) {
 export function playerView(s, id, action) {
   const p = s.players[id];
   return {
-    self: { id, name: p.name, role: p.role, personality: p.personality, memory: p.memory, intel: structuredClone(p.intel) },
+    self: { id, name: p.name, role: p.role, trait: p.trait || '', style: p.style || '', personality: p.personality, memory: p.memory, intel: structuredClone(p.intel) },
     allies: p.role === 'mafia' ? s.players.filter(x => x.role === 'mafia' && x.id !== id).map(x => ({ id: x.id, name: x.name, alive: x.alive })) : [],
     day: s.day, phase: s.phase, action, nominee: s.nominee,
     players: s.players.map(x => ({ id: x.id, name: x.name, alive: x.alive, ...(x.alive ? {} : { revealedRole: x.role }) })),
@@ -223,4 +223,207 @@ export function exportGame(s) {
   if (!s.winner) throw new Error('Full audit export unlocks after the game.');
   return structuredClone({ format: 'mafia-audit-1', protocol: s.protocol, id: s.id, setup: s.setup,
     history: s.history, calls: s.calls, usage: s.usage, winner: s.winner, practice: Boolean(s.practice) });
+}
+const clampSuspicion = v => Math.max(-3, Math.min(3, v));
+const ACCUSE_RE = /\b(suspect|suspicious|mafia|guilty|accuse|nominate|vote|lying|lie|evasive|contradict\w*|inconsistent|shady|watch(?:ing)?|pressure|account|explain|pushed|distrust|doubt|don['’]t trust|not clear|hard to trust)\b/i;
+const DEFEND_RE = /\b(trust|clear(?:ed)?|innocent|defend(?:ing)?|believe|agree|steady|reasonable|spare|town)\b/i;
+const PRONOUN_NAMES = new Set(['you', 'me', 'i', 'we', 'us', 'they', 'them', 'he', 'him', 'she', 'her', 'it']);
+const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const NOM_EVENT_RE = /^(.+?) is nominated(?: by the tie draw)?\. Their defense comes before the vote\.$/;
+const ELIM_EVENT_RE = /^(.+?) (was voted out|did not survive the night)\. They were (Mafia|a Civilian|a Detective|a Doctor)\.$/;
+// Pure deterministic public-only suspicion evolution (-3 trust to +3 suspicion).
+// Reads only player ids/names and public state.log — never hidden roles, memories, intel, council or human notes.
+export function computeSuspicionHistory(s) {
+  const roster = s.players.map(p => ({ id: p.id, name: p.name }));
+  const namePatterns = new Map(roster.filter(p => p.name && !PRONOUN_NAMES.has(p.name.toLowerCase())).map(p => [p.id, new RegExp(`\\b${escapeRegex(p.name)}\\b`, 'i')]));
+  const aliveSet = new Set(roster.map(p => p.id));
+  const scores = Object.fromEntries(roster.map(a => [a.id, Object.fromEntries(roster.filter(b => b.id !== a.id).map(b => [b.id, 0]))]));
+  const adjust = (actor, target, delta) => {
+    if (actor === target || !aliveSet.has(actor) || scores[actor]?.[target] === undefined) return;
+    scores[actor][target] = clampSuspicion(scores[actor][target] + delta);
+  };
+  const addSet = (map, key, val) => { if (!map.has(key)) map.set(key, new Set()); map.get(key).add(val); };
+  const findByName = name => roster.find(p => p.name === name && aliveSet.has(p.id)) || roster.find(p => p.name === name);
+  const maxDay = Math.max(1, s.day || 1, ...s.log.map(e => e.day || 1));
+  const snapshots = [];
+  for (let day = 1; day <= maxDay; day++) {
+    let dayNominee = null;
+    const dayNominators = new Map(), dayGuilty = new Map(), daySpared = new Map(), speechTouched = new Set(), eliminated = [];
+    for (const e of s.log) {
+      if ((e.day || 1) !== day) continue;
+      if (e.type === 'speech' && aliveSet.has(e.id)) {
+        const accuse = ACCUSE_RE.test(e.text), defend = !accuse && DEFEND_RE.test(e.text);
+        if (accuse || defend) {
+          for (const target of roster) {
+            if (target.id === e.id || !aliveSet.has(target.id)) continue;
+            const pattern = namePatterns.get(target.id);
+            const key = `${e.id}:${target.id}`;
+            if (pattern && !speechTouched.has(key) && pattern.test(e.text)) {
+              speechTouched.add(key);
+              adjust(e.id, target.id, accuse ? 1 : -1);
+            }
+          }
+        }
+      } else if (e.type === 'nominations') {
+        for (const n of e.nominations) {
+          if (n.target !== -1 && aliveSet.has(n.id)) {
+            adjust(n.id, n.target, 2);
+            addSet(dayNominators, n.target, n.id);
+            if (aliveSet.has(n.target)) adjust(n.target, n.id, 1);
+          }
+        }
+      } else if (e.type === 'ballots') {
+        for (const b of e.ballots) {
+          if (!aliveSet.has(b.id)) continue;
+          if (b.target !== -1) {
+            adjust(b.id, b.target, 2);
+            addSet(dayGuilty, b.target, b.id);
+          } else if (dayNominee !== null && b.id !== dayNominee) {
+            adjust(b.id, dayNominee, -1);
+            addSet(daySpared, dayNominee, b.id);
+          }
+        }
+      } else if (e.type === 'event') {
+        const nom = e.text.match(NOM_EVENT_RE);
+        if (nom) { const p = findByName(nom[1]); if (p) dayNominee = p.id; continue; }
+        const elim = e.text.match(ELIM_EVENT_RE);
+        if (elim) {
+          const victim = findByName(elim[1]);
+          if (!victim) continue;
+          const wasMafia = elim[3] === 'Mafia';
+          aliveSet.delete(victim.id);
+          eliminated.push({ id: victim.id, how: elim[2] === 'was voted out' ? 'voted' : 'night', revealedRole: elim[3].replace(/^a /, '') });
+          const pushers = new Set([...(dayNominators.get(victim.id) || []), ...(dayGuilty.get(victim.id) || [])]);
+          const sparers = daySpared.get(victim.id) || new Set();
+          for (const observer of aliveSet) {
+            for (const pusher of pushers) if (observer !== pusher && aliveSet.has(pusher)) adjust(observer, pusher, wasMafia ? -1 : 1);
+            for (const sparer of sparers) if (observer !== sparer && aliveSet.has(sparer)) adjust(observer, sparer, wasMafia ? 1 : -1);
+          }
+        }
+      }
+    }
+    const aliveIds = [...aliveSet].sort((a, b) => a - b);
+    const matrix = Object.fromEntries(aliveIds.map(aid => [aid, { ...scores[aid] }]));
+    const averageByTarget = Object.fromEntries(roster.map(target => {
+      const raters = aliveIds.filter(aid => aid !== target.id);
+      const avg = raters.length ? Math.round((raters.reduce((sum, aid) => sum + scores[aid][target.id], 0) / raters.length) * 100) / 100 : 0;
+      return [target.id, avg];
+    }));
+    const ranked = (aliveIds.length ? aliveIds : roster.map(p => p.id)).map(id => ({ id, score: averageByTarget[id] })).sort((a, b) => b.score - a.score || a.id - b.id);
+    snapshots.push({ day, aliveIds, matrix, averageByTarget, eliminated, peakTarget: ranked[0] || null });
+  }
+  return snapshots;
+}
+export function getSuspicionMatrix(s) {
+  return computeSuspicionHistory(s).at(-1);
+}
+// Pure deterministic turning-point chronicle for completed games. Never reads private notes, AI notebooks, or API credentials.
+export function buildChronicle(s) {
+  if (!s?.winner) return [];
+  const roster = s.players.map(p => ({ id: p.id, name: p.name }));
+  const byName = name => roster.find(p => p.name === name);
+  const nomByDay = new Map(), ballotSummaries = [], eliminations = [], saves = [];
+  for (const e of s.log) {
+    const day = e.day || 1;
+    if (e.type === 'nominations') {
+      const counts = new Map();
+      for (const n of e.nominations) if (n.target !== -1) counts.set(n.target, (counts.get(n.target) || 0) + 1);
+      nomByDay.set(day, { counts, nomineeId: null, nomineeName: null });
+    } else if (e.type === 'event') {
+      const nom = e.text.match(NOM_EVENT_RE);
+      if (nom) {
+        const p = byName(nom[1]);
+        const entry = nomByDay.get(day) || { counts: new Map(), nomineeId: null, nomineeName: null };
+        entry.nomineeId = p?.id ?? null; entry.nomineeName = nom[1];
+        nomByDay.set(day, entry);
+        continue;
+      }
+      const elim = e.text.match(ELIM_EVENT_RE);
+      if (elim) {
+        const role = elim[3].replace(/^a /, '');
+        eliminations.push({ day, how: elim[2] === 'was voted out' ? 'voted' : 'night', name: elim[1], role, wasMafia: role === 'Mafia', id: byName(elim[1])?.id ?? null });
+        continue;
+      }
+      if (e.text === 'Everyone survived the night.') saves.push({ day });
+    } else if (e.type === 'ballots') {
+      const nom = nomByDay.get(day);
+      if (nom?.nomineeId !== null && nom?.nomineeId !== undefined) {
+        const forVotes = e.ballots.filter(b => b.target === nom.nomineeId).length;
+        const spareVotes = e.ballots.length - forVotes;
+        const needed = Math.floor(e.ballots.length / 2) + 1;
+        ballotSummaries.push({ day, mode: 'nomination', nomineeId: nom.nomineeId, nomineeName: nom.nomineeName, forVotes, spareVotes, executed: forVotes >= needed, closeness: Math.abs(forVotes - needed) * 2 + Math.abs(forVotes - spareVotes) });
+      } else {
+        const counts = new Map();
+        for (const b of e.ballots) if (b.target !== -1) counts.set(b.target, (counts.get(b.target) || 0) + 1);
+        const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]);
+        const top = sorted[0]?.[1] || 0, second = sorted[1]?.[1] || 0;
+        const abstains = e.ballots.filter(b => b.target === -1).length;
+        ballotSummaries.push({ day, mode: 'plurality', topId: sorted[0]?.[0] ?? null, topVotes: top, secondVotes: second, abstains, executed: sorted.length > 0 && top > second && top > abstains, closeness: Math.abs(top - Math.max(second, abstains)) });
+      }
+    }
+  }
+  const rolePhrase = elim => elim.wasMafia ? 'Mafia' : `a ${elim.role}`;
+  const lastElim = eliminations.at(-1);
+  const endgame = (() => {
+    if (s.winner === 'Draw') return { day: s.day, order: 4, kind: 'endgame', key: `end:${s.day}`, text: `Day ${s.day}: Neither side broke the stalemate after ${s.day} days, ending the match in a draw.` };
+    if (s.winner === 'Town') return { day: s.day, order: 4, kind: 'endgame', key: lastElim?.day === s.day && lastElim.how === 'voted' ? `vote:${s.day}` : `end:${s.day}`, text: lastElim && lastElim.day === s.day ? `Day ${s.day}: Voting out ${lastElim.name} removed the last Mafia and sealed the Town victory.` : `Day ${s.day}: Town eliminated both Mafia to claim the table.` };
+    return { day: s.day, order: 4, kind: 'endgame', key: lastElim?.day === s.day ? `${lastElim.how}:${s.day}` : `end:${s.day}`, text: lastElim && lastElim.day === s.day ? `${lastElim.how === 'night' ? `Night ${s.day}` : `Day ${s.day}`}: ${lastElim.name}’s exit (${lastElim.role}) handed Mafia parity and the win.` : `Day ${s.day}: Mafia reached parity to take the table.` };
+  })();
+  const day1Elim = eliminations.find(e => e.day === 1 && e.how === 'voted');
+  const day1Ballot = ballotSummaries.find(b => b.day === 1);
+  const day1Nom = nomByDay.get(1);
+  let opening;
+  if (day1Elim && endgame.key !== 'vote:1') {
+    opening = { day: 1, order: 1, kind: 'opening', key: 'vote:1', text: `Day 1: ${day1Elim.name} was the first player voted out, revealing ${rolePhrase(day1Elim)}.` };
+  } else if (day1Ballot && day1Ballot.mode === 'nomination' && !day1Ballot.executed) {
+    opening = { day: 1, order: 1, kind: 'opening', key: 'vote:1', text: `Day 1: ${day1Ballot.nomineeName} drew the opening nomination but survived the ballot (${day1Ballot.forVotes}–${day1Ballot.spareVotes}).` };
+  } else if (day1Nom?.nomineeName) {
+    const count = day1Nom.counts.get(day1Nom.nomineeId) || 1;
+    opening = { day: 1, order: 1, kind: 'opening', key: 'nom:1', text: `Day 1: ${day1Nom.nomineeName} drew ${count} opening nomination${count > 1 ? 's' : ''} to set the early pressure.` };
+  } else if (s.log.some(e => e.day === 1 && e.type === 'event' && /No one is eliminated\./.test(e.text))) {
+    opening = { day: 1, order: 1, kind: 'opening', key: 'vote:1', text: 'Day 1: The opening day ended with no execution as the table held its fire.' };
+  } else {
+    opening = { day: 1, order: 1, kind: 'opening', key: 'open:1', text: 'Day 1: Eight players took the table with two hidden Mafia.' };
+  }
+  const chosen = [opening, endgame];
+  const usedKeys = new Set(chosen.map(c => c.key));
+  const middle = [];
+  const powerKills = eliminations.filter(e => e.how === 'night' && (e.role === 'Detective' || e.role === 'Doctor')).sort((a, b) => (a.role === 'Detective' ? 0 : 1) - (b.role === 'Detective' ? 0 : 1) || a.day - b.day);
+  if (powerKills.length) {
+    const k = powerKills[0];
+    middle.push({ day: k.day, order: 3, kind: 'night-strike', key: `night:${k.day}`, text: `Night ${k.day}: The Mafia struck a key Town role, eliminating ${k.name} (${k.role}).` });
+  }
+  const mafiaBallots = eliminations.filter(e => e.how === 'voted' && e.wasMafia);
+  for (const m of mafiaBallots) {
+    middle.push({ day: m.day, order: 2, kind: 'mafia-caught', key: `vote:${m.day}`, text: `Day ${m.day}: The table unmasked ${m.name} as Mafia at the ballot.` });
+  }
+  const swingCandidates = [...ballotSummaries].sort((a, b) => a.closeness - b.closeness || a.day - b.day);
+  for (const b of swingCandidates) {
+    const elim = eliminations.find(e => e.day === b.day && e.how === 'voted');
+    const text = b.mode === 'nomination'
+      ? (b.executed
+        ? `Day ${b.day}: A ${b.forVotes}–${b.spareVotes} ballot crossed the majority to execute ${b.nomineeName}${elim ? ` (${elim.role})` : ''}.`
+        : `Day ${b.day}: ${b.nomineeName} survived a ${b.forVotes}–${b.spareVotes} vote swing, keeping the table in play.`)
+      : (elim
+        ? `Day ${b.day}: A close plurality ballot eliminated ${elim.name} as ${rolePhrase(elim)}.`
+        : `Day ${b.day}: A split ballot ended without an execution, shifting momentum into the night.`);
+    middle.push({ day: b.day, order: 2, kind: 'vote-swing', key: `vote:${b.day}`, text });
+  }
+  if (saves.length) {
+    const sv = saves[0];
+    middle.push({ day: sv.day, order: 3, kind: 'night-save', key: `night:${sv.day}`, text: `Night ${sv.day}: Everyone survived the night, denying the Mafia a kill.` });
+  }
+  for (const item of middle) {
+    if (chosen.length >= 4) break;
+    if (usedKeys.has(item.key)) continue;
+    usedKeys.add(item.key);
+    chosen.push(item);
+  }
+  return chosen.sort((a, b) => a.day - b.day || a.order - b.order).map(({ day, kind, text }) => ({ day, kind, text }));
+}
+export function formatChronicle(s) {
+  const points = buildChronicle(s);
+  if (!points.length) return '';
+  const header = `Mafia Match Chronicle — ${s.winner === 'Draw' ? `Draw (Day ${s.day})` : `${s.winner} wins (Day ${s.day})`}`;
+  return [header, ...points.map(p => `• ${p.text}`)].join('\n');
 }

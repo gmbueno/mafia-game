@@ -40,6 +40,7 @@ const paths = {
   play: '<path d="m8 4 13 8-13 8z"/>',
   pause: '<path d="M8 4v16M16 4v16"/>',
   refresh: '<path d="M21 10a9 9 0 1 0-2 8M21 3v7h-7"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 };
 export const icon = (name, cls = '') => `<svg class="icon ${cls}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.town}</svg>`;
 export const emblem = `<svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20 2v36M2 20h36M7 7l26 26M7 33 33 7" stroke="currentColor" stroke-width="7"/><circle cx="20" cy="20" r="5" fill="currentColor"/></svg>`;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, startDiscussion, currentSpeaker, speak, legalTargets, resolveVotes, startNight, resolveNight, nextDay, agentView, checkWinner } from '../src/game.js';
+import { CAST, createGame, startDiscussion, currentSpeaker, speak, legalTargets, resolveNominations, resolveVotes, startNight, resolveNight, nextDay, agentView, checkWinner, computeSuspicionHistory, getSuspicionMatrix, buildChronicle, formatChronicle } from '../src/game.js';
 import { buildRequest } from '../src/ai.js';
 const seeded = () => { let n=12345; return () => {n=(n*16807)%2147483647;return(n-1)/2147483646;}; };
 function fixed() {
@@ -89,4 +89,85 @@ test('only correct transitions can enter night or a new day',()=>{
 });
 test('fifteen-day stalemate becomes a draw',()=>{
  const s=fixed();s.phase='night';s.day=15;resolveNight(s,actions(s,0,0,2));assert.equal(s.winner,'Draw');assert.equal(s.phase,'ended');
+});
+test('all seven AI cast members have distinct public personality traits and prompt cues',()=>{
+ const aiCast=CAST.slice(1);
+ assert.equal(aiCast.length,7);
+ const traits=aiCast.map(p=>p.trait);
+ assert.ok(traits.every(t=>typeof t==='string' && t.trim().length>0));
+ assert.equal(new Set(traits).size,7);
+ const s=createGame('Human','civilian',99);
+ const p1=s.players[1];
+ const v=agentView(s,1,'speech');
+ assert.equal(v.self.trait,p1.trait);
+ assert.equal(v.self.style,p1.style);
+ const req=buildRequest(s,1,'speech');
+ assert.ok(req.messages[0].content.includes(p1.trait));
+ assert.ok(req.messages[0].content.includes(p1.personality));
+ for(const p of v.players) assert.deepEqual(Object.keys(p).sort(),['alive','id','name']);
+});
+test('suspicion tracking updates deterministically from public events and stays clamped to [-3, 3]',()=>{
+ const s=createGame('Human','civilian',42,{personas:false});
+ ['civilian','mafia','mafia','doctor','detective','civilian','civilian','civilian'].forEach((r,i)=>s.players[i].role=r);
+ startDiscussion(s);
+ while(s.phase==='discussion') {
+  const sp=currentSpeaker(s);
+  if(sp===0) speak(s,0,'I suspect Cleo is hiding something.');
+  else if(sp===4) speak(s,4,'I trust Miles so far.');
+  else speak(s,sp,'Listening to the room.');
+ }
+ const afterSpeech=getSuspicionMatrix(s);
+ assert.equal(afterSpeech.matrix[0][2],1);
+ assert.equal(afterSpeech.matrix[4][3],-1);
+ const noms=s.players.map(p=>({id:p.id,target:p.id===2?-1:p.id===0||p.id===1?2:-1,speech:p.id===0||p.id===1?'Nomination reason.':''}));
+ resolveNominations(s,noms);
+ assert.equal(s.nominee,2);
+ const afterNom=getSuspicionMatrix(s);
+ assert.equal(afterNom.matrix[0][2],3); // +1 speech +2 nomination = +3
+ assert.equal(afterNom.matrix[1][2],2); // +2 nomination
+ assert.equal(afterNom.matrix[2][0],1); // mutual reaction from nominee
+ speak(s,2,'Defending myself.');
+ // Guilty votes from 0,1,3,4,5 (5 of 8 > 4 => executes Cleo who is Mafia); 6 and 7 spare Cleo.
+ resolveVotes(s,s.players.map(p=>({id:p.id,target:[0,1,3,4,5].includes(p.id)?2:-1})));
+ const snap=getSuspicionMatrix(s);
+ assert.equal(snap.day,1);
+ assert.ok(!snap.aliveIds.includes(2));
+ for(const aid of snap.aliveIds) {
+  for(const [tid,val] of Object.entries(snap.matrix[aid])) {
+   assert.notEqual(Number(tid),aid);
+   assert.ok(val>=-3 && val<=3,`score ${val} out of bounds`);
+  }
+ }
+ // Cleo was revealed Mafia: seat 0 pushed (nom+guilty) so living observer 4 trusts 0 (-1), while seat 6 spared Mafia so observer 4 suspects 6 (+1).
+ assert.equal(snap.matrix[4][0],-1);
+ assert.equal(snap.matrix[4][6],1);
+ assert.equal(snap.matrix[6][2],-1); // seat 6 voted to spare Cleo (-1)
+});
+test('buildChronicle extracts 2-4 turning points on completed games and excludes private secrets',()=>{
+ const g=createGame('Human','civilian',42,{personas:false,councilRounds:0});
+ ['civilian','mafia','mafia','doctor','detective','civilian','civilian','civilian'].forEach((r,i)=>g.players[i].role=r);
+ g.notes='SUPER_SECRET_HUMAN_NOTE';
+ g.players[1].memory='SECRET_AI_MEMORY';
+ g.calls.push({request:'sk-or-v1-FAKE_KEY_SENTINEL'});
+ assert.deepEqual(buildChronicle(g),[]);
+ startDiscussion(g);
+ while(g.phase==='discussion') speak(g,currentSpeaker(g),'Day 1 statement.');
+ resolveNominations(g,g.players.map(p=>({id:p.id,target:p.id===0?2:-1,speech:p.id===0?'Testing Cleo.':''})));
+ speak(g,2,'Defense.');
+ resolveVotes(g,g.players.map(p=>({id:p.id,target:[0,3,4,5,6].includes(p.id)?2:-1}))); // Cleo (Mafia) voted out Day 1
+ startNight(g);
+ resolveNight(g,actions(g,4,0,1)); // Mafia eliminates Detective (June, id 4) on Night 1
+ nextDay(g);
+ while(g.phase==='discussion') speak(g,currentSpeaker(g),'Day 2 statement.');
+ resolveNominations(g,g.players.filter(p=>p.alive).map(p=>({id:p.id,target:p.id===0?1:-1,speech:p.id===0?'Theo next.':''})));
+ speak(g,1,'Final defense.');
+ resolveVotes(g,g.players.filter(p=>p.alive).map(p=>({id:p.id,target:p.id===1?-1:1}))); // Theo (Mafia) voted out Day 2 -> Town wins
+ assert.equal(g.winner,'Town');
+ const points=buildChronicle(g);
+ assert.ok(points.length>=2 && points.length<=4,`expected 2-4 points, got ${points.length}`);
+ assert.ok(points.some(p=>p.kind==='night-strike' && /Detective/.test(p.text)));
+ assert.ok(points.some(p=>p.kind==='endgame' && /Town/.test(p.text)));
+ const text=formatChronicle(g);
+ assert.ok(text.includes('Town wins'));
+ for(const secret of ['SUPER_SECRET_HUMAN_NOTE','SECRET_AI_MEMORY','sk-or-v1-FAKE_KEY_SENTINEL']) assert.ok(!text.includes(secret));
 });

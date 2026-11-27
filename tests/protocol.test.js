@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, startDiscussion, currentSpeaker, speak, whisper, resolveNominations, resolveVotes, startNight, resolveNight, alive, agentView, legalTargets, remember, replayAt, exportGame } from '../src/game.js';
+import { createGame, startDiscussion, currentSpeaker, speak, whisper, resolveNominations, resolveVotes, startNight, resolveNight, alive, agentView, legalTargets, remember, replayAt, exportGame, computeSuspicionHistory, buildChronicle, formatChronicle } from '../src/game.js';
 import { buildRequest, requestTurn, recordCall, ledgerSummary, checkBudget } from '../src/ai.js';
 import { runAutomatedGame, beliefProbe, scoreBeliefs } from '../src/evaluation.js';
 import { MODEL, wordCount } from '../src/protocol.js';
@@ -129,4 +129,24 @@ test('paid probe adapter records its cost but never alters game memory or public
   const result=await requestTurn(s,0,'probe',{pricing});assert.equal(Object.keys(result.probabilities).length,7);assert.equal(s.usage.calls,1);
   assert.deepEqual(s.players,before.players);assert.deepEqual(s.log,before.log);assert.deepEqual(s.history,before.history);
  }finally{globalThis.fetch=fetch;}
+});
+test('suspicion history is invariant to hidden roles, private notebooks, council and human notes',async()=>{
+ for(let seed=1;seed<=10;seed++) {
+  const {state,status}=await runAutomatedGame({seed});assert.equal(status,'completed');
+  const mid=replayAt(state,Math.max(1,Math.floor(state.history.length/2)));
+  const mutated=structuredClone(mid);
+  const living=mutated.players.filter(p=>p.alive);
+  if(living.length>=2) [living[0].role,living[1].role]=[living[1].role,living[0].role];
+  for(const p of mutated.players){p.memory='HIDDEN_NOTEBOOK';p.intel=[{day:1,text:'HIDDEN_INTEL'}];}
+  mutated.council=[{day:1,id:1,text:'HIDDEN_COUNCIL',audience:[1,2]}];
+  mutated.notes='HIDDEN_HUMAN_NOTES';
+  mutated.calls=[{content:'HIDDEN_API_CALL'}];
+  assert.deepEqual(computeSuspicionHistory(mid),computeSuspicionHistory(mutated));
+  assert.deepEqual(computeSuspicionHistory(state),computeSuspicionHistory(replayAt(state)));
+  const chronicle=buildChronicle(state);
+  assert.ok(chronicle.length>=2 && chronicle.length<=4);
+  assert.deepEqual(chronicle,buildChronicle(replayAt(state)));
+  const formatted=formatChronicle(state);
+  assert.ok(!formatted.includes('HIDDEN_HUMAN_NOTES'));
+ }
 });
